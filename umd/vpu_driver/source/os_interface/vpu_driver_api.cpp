@@ -46,11 +46,69 @@ VPUDriverApi::VPUDriverApi(VPUDriverApi &&v)
     v.vpuFd = -1;
 }
 
+std::string request_to_string(unsigned int request) {
+    switch (request) {
+    // --- DRM 通用 IOCTL ---
+    case DRM_IOCTL_VERSION:
+        return "DRM_IOCTL_VERSION";
+    case DRM_IOCTL_GEM_CLOSE:
+        return "DRM_IOCTL_GEM_CLOSE";
+    case DRM_IOCTL_GET_CAP:
+        return "DRM_IOCTL_GET_CAP";
+    case DRM_IOCTL_PRIME_HANDLE_TO_FD:
+        return "DRM_IOCTL_PRIME_HANDLE_TO_FD";
+    case DRM_IOCTL_PRIME_FD_TO_HANDLE:
+        return "DRM_IOCTL_PRIME_FD_TO_HANDLE";
+
+    // --- IVPU 专用 IOCTL ---
+    case DRM_IOCTL_IVPU_GET_PARAM:
+        return "DRM_IOCTL_IVPU_GET_PARAM";
+    case DRM_IOCTL_IVPU_SET_PARAM:
+        return "DRM_IOCTL_IVPU_SET_PARAM";
+    case DRM_IOCTL_IVPU_BO_CREATE:
+        return "DRM_IOCTL_IVPU_BO_CREATE";
+    case DRM_IOCTL_IVPU_BO_INFO:
+        return "DRM_IOCTL_IVPU_BO_INFO";
+    case DRM_IOCTL_IVPU_SUBMIT:
+        return "DRM_IOCTL_IVPU_SUBMIT";
+    case DRM_IOCTL_IVPU_BO_WAIT:
+        return "DRM_IOCTL_IVPU_BO_WAIT";
+    case DRM_IOCTL_IVPU_METRIC_STREAMER_START:
+        return "DRM_IOCTL_IVPU_METRIC_STREAMER_START";
+    case DRM_IOCTL_IVPU_METRIC_STREAMER_STOP:
+        return "DRM_IOCTL_IVPU_METRIC_STREAMER_STOP";
+    case DRM_IOCTL_IVPU_METRIC_STREAMER_GET_DATA:
+        return "DRM_IOCTL_IVPU_METRIC_STREAMER_GET_DATA";
+    case DRM_IOCTL_IVPU_METRIC_STREAMER_GET_INFO:
+        return "DRM_IOCTL_IVPU_METRIC_STREAMER_GET_INFO";
+    case DRM_IOCTL_IVPU_CMDQ_CREATE:
+        return "DRM_IOCTL_IVPU_CMDQ_CREATE";
+    case DRM_IOCTL_IVPU_CMDQ_DESTROY:
+        return "DRM_IOCTL_IVPU_CMDQ_DESTROY";
+    case DRM_IOCTL_IVPU_CMDQ_SUBMIT:
+        return "DRM_IOCTL_IVPU_CMDQ_SUBMIT";
+    case DRM_IOCTL_IVPU_BO_CREATE_FROM_USERPTR:
+        return "DRM_IOCTL_IVPU_BO_CREATE_FROM_USERPTR";
+
+    // --- 未知 IOCTL 处理 ---
+    default: {
+        std::ostringstream oss;
+        // 按照之前的风格，打印十六进制数值
+        oss << "UNKNOWN_IOCTL(" << std::showbase << std::hex << request << ")";
+        return oss.str();
+    }
+    }
+}
+
+// static int first = 1;
+
 int VPUDriverApi::doIoctl(unsigned int request, void *arg) const {
     if (vpuFd < 0 || arg == nullptr) {
         LOG_E("Invalid arguments (vpuFd:%d, arg:%p)", vpuFd, arg);
         return -EINVAL;
     }
+
+    // if (first) std::cout << request_to_string(request) << std::endl;
 
     TRACE_EVENT("SYS", perfetto::StaticString{driver_ioctl_request_str(request)});
     LOG(IOCTL, "ioctl(%s)..", driver_ioctl_trace(vpuFd, request, arg).c_str());
@@ -154,16 +212,32 @@ int VPUDriverApi::commandQueueCreate(uint32_t priority, uint32_t &queueId, bool 
     return 0;
 }
 
-static int first = 1;
-
 int VPUDriverApi::commandQueueSubmit(drm_ivpu_cmdq_submit *arg) const {
     // std::cout << "commandQueueSubmit" << std::endl;
     if (first) {
         std::cout << "commandQueueSubmit" << std::endl;
         std::cout << "vpuFd: " << vpuFd << std::endl;
         std::cout << "cmdq_id: " << arg->cmdq_id << std::endl;
-        std::cout << "buffers_ptr: " << arg->buffers_ptr << std::endl;
+        std::cout << "buffers_ptr: " << std::hex << arg->buffers_ptr << std::dec << std::endl;
         std::cout << "buffer_count: " << arg->buffer_count << std::endl;
+        
+        uint32_t count = arg->buffer_count;
+        uint32_t *buffers = (uint32_t*)arg->buffers_ptr;
+        drm_ivpu_bo_info info;
+
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t handle = buffers[i];
+
+            info.handle = handle;
+            doIoctl(DRM_IOCTL_IVPU_BO_INFO, &info);
+            std::cout << std::hex << info.vpu_addr << std::dec << std::endl;
+            void *ptr = osInfc.osiMmap(nullptr, info.size, PROT_READ | PROT_WRITE, MAP_SHARED, vpuFd, safe_cast<off_t>(info.mmap_offset));
+
+            if (!ptr) std::cout << "error" << std::endl;
+
+            osInfc.osiMunmap(ptr, info.size);
+        }
+
         std::cout << "commands_offset: " << arg->commands_offset << std::endl;
         std::cout << "preempt_buffer_index: " << arg->preempt_buffer_index << std::endl;
         first = 0;
