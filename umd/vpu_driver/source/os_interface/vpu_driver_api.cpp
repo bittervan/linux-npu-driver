@@ -25,6 +25,7 @@
 #include <uapi/drm/ivpu_accel.h>
 #include <unistd.h>
 #include <utility>
+#include <iostream>
 
 namespace VPU {
 
@@ -153,7 +154,20 @@ int VPUDriverApi::commandQueueCreate(uint32_t priority, uint32_t &queueId, bool 
     return 0;
 }
 
+static int first = 1;
+
 int VPUDriverApi::commandQueueSubmit(drm_ivpu_cmdq_submit *arg) const {
+    // std::cout << "commandQueueSubmit" << std::endl;
+    if (first) {
+        std::cout << "commandQueueSubmit" << std::endl;
+        std::cout << "vpuFd: " << vpuFd << std::endl;
+        std::cout << "cmdq_id: " << arg->cmdq_id << std::endl;
+        std::cout << "buffers_ptr: " << arg->buffers_ptr << std::endl;
+        std::cout << "buffer_count: " << arg->buffer_count << std::endl;
+        std::cout << "commands_offset: " << arg->commands_offset << std::endl;
+        std::cout << "preempt_buffer_index: " << arg->preempt_buffer_index << std::endl;
+        first = 0;
+    }
     int ret = doIoctl(DRM_IOCTL_IVPU_CMDQ_SUBMIT, arg);
     if (ret && errno != EBUSY)
         LOG_E("DRM_IOCTL_IVPU_CMDQ_SUBMIT failed, error %d(%d)", ret, errno);
