@@ -213,35 +213,6 @@ int VPUDriverApi::commandQueueCreate(uint32_t priority, uint32_t &queueId, bool 
 }
 
 int VPUDriverApi::commandQueueSubmit(drm_ivpu_cmdq_submit *arg) const {
-    // std::cout << "commandQueueSubmit" << std::endl;
-    if (first) {
-        std::cout << "commandQueueSubmit" << std::endl;
-        std::cout << "vpuFd: " << vpuFd << std::endl;
-        std::cout << "cmdq_id: " << arg->cmdq_id << std::endl;
-        std::cout << "buffers_ptr: " << std::hex << arg->buffers_ptr << std::dec << std::endl;
-        std::cout << "buffer_count: " << arg->buffer_count << std::endl;
-        
-        uint32_t count = arg->buffer_count;
-        uint32_t *buffers = (uint32_t*)arg->buffers_ptr;
-        drm_ivpu_bo_info info;
-
-        for (uint32_t i = 0; i < count; i++) {
-            uint32_t handle = buffers[i];
-
-            info.handle = handle;
-            doIoctl(DRM_IOCTL_IVPU_BO_INFO, &info);
-            std::cout << std::hex << info.vpu_addr << std::dec << std::endl;
-            void *ptr = osInfc.osiMmap(nullptr, info.size, PROT_READ | PROT_WRITE, MAP_SHARED, vpuFd, safe_cast<off_t>(info.mmap_offset));
-
-            if (!ptr) std::cout << "error" << std::endl;
-
-            osInfc.osiMunmap(ptr, info.size);
-        }
-
-        std::cout << "commands_offset: " << arg->commands_offset << std::endl;
-        std::cout << "preempt_buffer_index: " << arg->preempt_buffer_index << std::endl;
-        first = 0;
-    }
     int ret = doIoctl(DRM_IOCTL_IVPU_CMDQ_SUBMIT, arg);
     if (ret && errno != EBUSY)
         LOG_E("DRM_IOCTL_IVPU_CMDQ_SUBMIT failed, error %d(%d)", ret, errno);
