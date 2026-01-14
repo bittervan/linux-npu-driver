@@ -24,6 +24,11 @@ VPU_CONTEXT_SAVE_AREA_SIZE = 64
 VPU_CMD_HEADER_SIZE = 4  # uint16_t type + uint16_t size
 VPU_CMD_BUFFER_HEADER_SIZE = 64  # 8 * uint64
 
+# VpuHostParsedInference sizes
+VPU_HOST_PARSED_INFERENCE_SIZE = 384  # Total size
+VPU_RESOURCE_REQUIREMENTS_SIZE = 12   # ResourceRequirements size
+VPU_PERFORMANCE_METRICS_SIZE = 320   # PerformanceMetrics size
+
 # Command types
 VPU_CMD_TYPE = {
     0x0000: 'UNKNOWN',
@@ -37,6 +42,17 @@ VPU_CMD_TYPE = {
     0x0202: 'MEMORY_FILL',
     0x0302: 'COPY',
     0x0306: 'INFERENCE_EXECUTE',
+}
+
+# Descriptor types
+VPU_DESC_TYPE = {
+    0x100: 'SCRATCH',
+    0x101: 'METADATA',
+    0x102: 'WEIGHTS',
+    0x103: 'KERNEL_DATA',
+    0x200: 'INPUT',
+    0x201: 'OUTPUT',
+    0x202: 'PROFILING_OUTPUT',
 }
 
 # Command size mappings (minimum sizes, excluding header)
@@ -88,9 +104,117 @@ class VpuJobLifter:
             buf.size = buf_data.get('size', 0)
             buf.mmap_offset = buf_data.get('mmap_offset', 0)
             buf.flags = buf_data.get('flags', 0)
-            buf.data = parse_hex_string(buf_data.get('data', ''))
+
+            # Parse buffer content
+            raw_data = parse_hex_string(buf_data.get('data', ''))
+            buf.raw_data = raw_data
+
+            # Try to parse as Host Parsed Inference (Buffer 1)
+            if buf.index == 1 and len(raw_data) >= VPU_HOST_PARSED_INFERENCE_SIZE:
+                parsed_hpi = self._parse_host_parsed_inference(raw_data)
+                if parsed_hpi:
+                    buf.host_parsed_inference.CopyFrom(parsed_hpi)
+
+            # Try to parse as Mapped Inference
+            elif len(raw_data) >= 448:  # Minimum size for VpuMappedInference
+                mapped_inf = self._parse_mapped_inference(raw_data)
+                if mapped_inf:
+                    buf.mapped_inference.CopyFrom(mapped_inf)
 
         return job
+
+    def _parse_host_parsed_inference(self, data: bytes) -> Optional[vpu_job_pb2.VpuHostParsedInference]:
+        """Parse VpuHostParsedInference structure from buffer data."""
+        if len(data) < VPU_HOST_PARSED_INFERENCE_SIZE:
+            return None
+
+        try:
+            hpi = vpu_job_pb2.VpuHostParsedInference()
+
+            # Parse reserved (offset 0-8)
+            hpi.reserved = struct.unpack('<Q', data[0:8])[0]
+
+            # Parse ResourceRequirements (offset 8-20)
+            res_req = hpi.resource_requirements
+            res_req.nn_slice_length = struct.unpack('<I', data[8:12])[0]
+            # Padding: 6 bytes, stored as 2 uint32s
+            res_req.pad_0 = struct.unpack('<I', data[12:16])[0]
+            res_req.pad_0 = (res_req.pad_0 << 16) | struct.unpack('<H', data[16:18])[0]
+            res_req.nn_slice_count = struct.unpack('<B', data[20:21])[0]
+            res_req.nn_barriers = struct.unpack('<B', data[21:22])[0]
+
+            # Padding (offset 20-24)
+            hpi.pad_0 = struct.unpack('<I', data[24:28])[0]
+
+            # Parse VpuPerformanceMetrics (offset 24-344)
+            perf = hpi.performance_metrics
+            perf.freq_base = struct.unpack('<I', data[28:32])[0]
+            perf.freq_step = struct.unpack('<I', data[32:36])[0]
+            perf.bw_base = struct.unpack('<I', data[36:40])[0]
+            perf.bw_step = struct.unpack('<I', data[40:44])[0]
+
+            # Parse ticks and scalability tables (offset 44-364)
+            # Each is [5][5] array: 25 elements of 8 bytes for ticks (200 bytes)
+            #                        25 elements of 4 bytes for scalability (100 bytes)
+            ticks_data = data[44:244]
+            for i in range(25):
+                tick_val = struct.unpack('<Q', ticks_data[i*8:(i+1)*8])[0]
+                perf.ticks.append(tick_val)
+
+            scal_data = data[244:344]
+            for i in range(25):
+                scal_val = struct.unpack('<f', scal_data[i*4:(i+1)*4])[0]
+                perf.scalability.append(scal_val)
+
+            perf.activity_factor = struct.unpack('<f', data[344:348])[0]
+
+            # Parse VpuTaskReference<VpuMappedInference> (offset 344-368)
+            mapped = hpi.mapped
+            mapped.address = struct.unpack('<Q', data[344:352])[0]
+            mapped.count = struct.unpack('<I', data[352:356])[0]
+            mapped.offset = struct.unpack('<I', data[356:360])[0]
+
+            return hpi
+        except Exception as e:
+            print(f"Warning: Failed to parse Host Parsed Inference: {e}")
+            return None
+
+    def _parse_mapped_inference(self, data: bytes) -> Optional[vpu_job_pb2.VpuMappedInference]:
+        """Parse VpuMappedInference structure from buffer data."""
+        if len(data) < 448:
+            return None
+
+        try:
+            mapped_inf = vpu_job_pb2.VpuMappedInference()
+
+            # Parse header (offset 0-24)
+            mapped_inf.vpu_nnrt_api_ver = struct.unpack('<I', data[0:4])[0]
+            mapped_inf.pad_0 = struct.unpack('<I', data[4:8])[0]
+            mapped_inf.reserved_0 = struct.unpack('<Q', data[8:16])[0]
+
+            # Parse VpuTaskCounts (offset 16-44)
+            counts = mapped_inf.task_storage_counts
+            counts.dpu_invariant_count = struct.unpack('<I', data[16:20])[0]
+            counts.dpu_variant_count = struct.unpack('<I', data[20:24])[0]
+            counts.act_kernel_count = struct.unpack('<I', data[24:28])[0]
+            counts.act_shv_kernel_count = struct.unpack('<I', data[28:32])[0]
+            counts.dma_task_count = struct.unpack('<I', data[32:36])[0]
+            counts.barrier_count = struct.unpack('<I', data[36:40])[0]
+            counts.pad_0 = struct.unpack('<I', data[40:44])[0]
+
+            # Parse task_storage_size (offset 44-48)
+            mapped_inf.task_storage_size = struct.unpack('<I', data[44:48])[0]
+
+            # Note: VpuTaskReference fields are complex, skipping detailed parsing
+            # for now - just storing raw data
+
+            # Parse VpuNNShaveRuntimeConfigs (offset ?)
+            # Skipping detailed parsing for now
+
+            return mapped_inf
+        except Exception as e:
+            print(f"Warning: Failed to parse Mapped Inference: {e}")
+            return None
 
     def parse_command_buffer(self, buffer_bytes: bytes) -> vpu_job_pb2.VpuCommandBuffer:
         """Parse command buffer structure."""
@@ -122,7 +246,6 @@ class VpuJobLifter:
             cmd_buffer.header.fence_heap_base_address = header_fields[6]
         except Exception as e:
             print(f"Warning: Failed to parse header at offset {header_offset}: {e}")
-            # Try to set minimal values
             cmd_buffer.header.cmd_buffer_size = 0
             cmd_buffer.header.cmd_offset = 0
             cmd_buffer.header.context_save_area_address = 0
@@ -130,19 +253,16 @@ class VpuJobLifter:
         # Parse internal sync fences (2 fences after header, each 24 bytes)
         internal_sync_offset = header_offset + 64
         for i in range(2):
-            if len(buffer_bytes) >= internal_sync_offset + i * 24 + 4:
-                fence_offset = internal_sync_offset + i * 24
-                try:
-                    fence = cmd_buffer.internal_sync.internal_fences.add()
-                    # Read uint16 (2 bytes) for type and size
-                    fence.header.type = struct.unpack('<H', buffer_bytes[fence_offset:fence_offset + 2])[0]
-                    fence.header.size = struct.unpack('<H', buffer_bytes[fence_offset + 2:fence_offset + 4])[0]
-                    if len(buffer_bytes) >= fence_offset + 24:
-                        fence.reserved_0 = struct.unpack('<I', buffer_bytes[fence_offset + 4:fence_offset + 8])[0]
-                        fence.offset = struct.unpack('<Q', buffer_bytes[fence_offset + 8:fence_offset + 16])[0]
-                        fence.value = struct.unpack('<Q', buffer_bytes[fence_offset + 16:fence_offset + 24])[0]
-                except Exception as e:
-                    print(f"Warning: Failed to parse internal fence {i} at offset {fence_offset}: {e}")
+            fence_offset = internal_sync_offset + i * 24
+            if len(buffer_bytes) >= fence_offset + 4:
+                fence = cmd_buffer.internal_sync.internal_fences.add()
+                # Read uint16 (2 bytes) for type and size
+                fence.header.type = struct.unpack('<H', buffer_bytes[fence_offset:fence_offset + 2])[0]
+                fence.header.size = struct.unpack('<H', buffer_bytes[fence_offset + 2:fence_offset + 4])[0]
+                if len(buffer_bytes) >= fence_offset + 24:
+                    fence.reserved_0 = struct.unpack('<I', buffer_bytes[fence_offset + 4:fence_offset + 8])[0]
+                    fence.offset = struct.unpack('<Q', buffer_bytes[fence_offset + 8:fence_offset + 16])[0]
+                    fence.value = struct.unpack('<Q', buffer_bytes[fence_offset + 16:fence_offset + 24])[0]
 
         # Parse command list (starting at cmd_offset from header start)
         cmd_list_offset = header_offset + cmd_buffer.header.cmd_offset
@@ -276,7 +396,7 @@ class VpuJobLifter:
                     inf.host_mapped_inference.reserved_0 = struct.unpack('<I', cmd_data[28:32])[0]
             cmd.inference_execute.CopyFrom(inf)
 
-        elif cmd_type == 0x0100:  # TIMESTAMP
+        elif cmd_type == 0x0100:  # TIMESTAMP (duplicate case)
             ts = vpu_job_pb2.VpuCmdTimestamp()
             ts.header.type = cmd_type
             ts.header.size = len(cmd_data)
@@ -313,42 +433,51 @@ def main():
         if job.buffer_count > 0:
             try:
                 first_buffer = job.buffers[0]
-                cmd_buffer = lifter.parse_command_buffer(first_buffer.data)
-                print(f"Command buffer parsed successfully:")
-                print(f"  Buffer size: {first_buffer.size} bytes")
-                print(f"  Command buffer size: {cmd_buffer.header.cmd_buffer_size}")
-                print(f"  Number of commands: {len(cmd_buffer.commands)}")
+                if first_buffer.HasField('raw_data'):
+                    cmd_buffer = lifter.parse_command_buffer(first_buffer.raw_data)
+                    print(f"Command buffer parsed successfully:")
+                    print(f"  Buffer size: {first_buffer.size} bytes")
+                    print(f"  Command buffer size: {cmd_buffer.header.cmd_buffer_size}")
+                    print(f"  Number of commands: {len(cmd_buffer.commands)}")
 
-                for i, cmd in enumerate(cmd_buffer.commands):
-                    # Check each possible field to get the actual type
-                    if cmd.HasField('nop'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.nop.header.type, 'UNKNOWN')
-                        cmd_size = cmd.nop.header.size
-                    elif cmd.HasField('timestamp'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.timestamp.header.type, 'UNKNOWN')
-                        cmd_size = cmd.timestamp.header.size
-                    elif cmd.HasField('fence'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.fence.header.type, 'UNKNOWN')
-                        cmd_size = cmd.fence.header.size
-                    elif cmd.HasField('barrier'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.barrier.header.type, 'UNKNOWN')
-                        cmd_size = cmd.barrier.header.size
-                    elif cmd.HasField('metric_query'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.metric_query.header.type, 'UNKNOWN')
-                        cmd_size = cmd.metric_query.header.size
-                    elif cmd.HasField('memory_fill'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.memory_fill.header.type, 'UNKNOWN')
-                        cmd_size = cmd.memory_fill.header.size
-                    elif cmd.HasField('copy'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.copy.header.type, 'UNKNOWN')
-                        cmd_size = cmd.copy.header.size
-                    elif cmd.HasField('inference_execute'):
-                        cmd_type = VPU_CMD_TYPE.get(cmd.inference_execute.header.type, 'UNKNOWN')
-                        cmd_size = cmd.inference_execute.header.size
-                    else:
-                        cmd_type = 'UNKNOWN'
+                    for i, cmd in enumerate(cmd_buffer.commands):
+                        cmd_type = 0
                         cmd_size = 0
-                    print(f"    Command {i}: {cmd_type} (size={cmd_size})")
+                        if cmd.HasField('nop'):
+                            cmd_type = cmd.nop.header.type
+                            cmd_size = cmd.nop.header.size
+                        elif cmd.HasField('timestamp'):
+                            cmd_type = cmd.timestamp.header.type
+                            cmd_size = cmd.timestamp.header.size
+                        elif cmd.HasField('fence'):
+                            cmd_type = cmd.fence.header.type
+                            cmd_size = cmd.fence.header.size
+                        elif cmd.HasField('barrier'):
+                            cmd_type = cmd.barrier.header.type
+                            cmd_size = cmd.barrier.header.size
+                        elif cmd.HasField('metric_query'):
+                            cmd_type = cmd.metric_query.header.type
+                            cmd_size = cmd.metric_query.header.size
+                        elif cmd.HasField('memory_fill'):
+                            cmd_type = cmd.memory_fill.header.type
+                            cmd_size = cmd.memory_fill.header.size
+                        elif cmd.HasField('copy'):
+                            cmd_type = cmd.copy.header.type
+                            cmd_size = cmd.copy.header.size
+                        elif cmd.HasField('inference_execute'):
+                            cmd_type = cmd.inference_execute.header.type
+                            cmd_size = cmd.inference_execute.header.size
+
+                        cmd_name = VPU_CMD_TYPE.get(cmd_type, f'UNKNOWN({cmd_type:04x})')
+                        print(f"    Command {i}: {cmd_name} (type=0x{cmd_type:04x}, size={cmd_size})")
+
+                    # Check if Buffer 1 was parsed as Host Parsed Inference
+                    if len(job.buffers) > 1 and job.buffers[1].HasField('host_parsed_inference'):
+                        hpi = job.buffers[1].host_parsed_inference
+                        print(f"\nHost Parsed Inference parsed:")
+                        print(f"  nn_slice_count: {hpi.resource_requirements.nn_slice_count}")
+                        print(f"  nn_barriers: {hpi.resource_requirements.nn_barriers}")
+                        print(f"  activity_factor: {hpi.performance_metrics.activity_factor}")
             except Exception as e:
                 print(f"Warning: Failed to parse command buffer: {e}")
 

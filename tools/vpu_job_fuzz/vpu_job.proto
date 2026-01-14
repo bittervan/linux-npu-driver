@@ -34,16 +34,27 @@ message VpuCmdResourceDescriptor {
 
 // Copy command descriptor (37xx)
 message VpuCmdCopyDescriptor37xx {
-  uint64 src_address = 1;
-  uint64 dst_address = 2;
-  uint32 size = 3;
+  uint64 reserved_0 = 1;
+  uint64 reserved_1 = 2;
+  uint64 src_address = 3;
+  uint64 dst_address = 4;
+  uint32 size = 5;
+  uint32 reserved_2 = 6;
+  uint32 reserved_3 = 7;
+  uint32 reserved_4 = 8;
+  uint32 reserved_5 = 9;
 }
 
 // Copy command descriptor (40xx)
 message VpuCmdCopyDescriptor40xx {
-  uint32 size = 1;
-  uint64 src_address = 2;
-  uint64 dst_address = 3;
+  uint64 reserved_0 = 1;
+  uint64 reserved_1 = 2;
+  uint64 reserved_2 = 3;
+  uint32 size = 4;
+  uint32 reserved_3 = 5;
+  uint64 reserved_4 = 6;
+  uint64 src_address = 7;
+  uint64 dst_address = 8;
 }
 
 // Copy command
@@ -124,6 +135,76 @@ message VpuCommand {
   }
 }
 
+// VpuTaskReference structure (24 bytes)
+message VpuTaskReference {
+  uint64 address = 1;  // VPU address of referenced structure
+  uint32 count = 2;    // Number of entries
+  uint32 offset = 3;   // Offset from address
+}
+
+// ResourceRequirements structure (12 bytes)
+message VpuResourceRequirements {
+  uint32 nn_slice_length = 1;  // Network slice length
+  uint32 pad_0 = 2;          // Padding (6 bytes, stored as 2 uint32)
+  uint32 nn_slice_count = 3;  // Number of network slices (1 byte)
+  uint32 nn_barriers = 4;    // Number of barriers (1 byte)
+}
+
+// VpuPerformanceMetrics structure (320 bytes)
+message VpuPerformanceMetrics {
+  uint32 freq_base = 1;          // Base frequency in MHz
+  uint32 freq_step = 2;          // Frequency step in MHz
+  uint32 bw_base = 3;            // Base bandwidth in MB/s
+  uint32 bw_step = 4;            // Bandwidth step in MB/s
+  repeated uint64 ticks = 5;      // Execution time ticks table [5][5]
+  repeated float scalability = 6;   // Scalability table [5][5]
+  float activity_factor = 7;         // Activity factor
+}
+
+// VpuHostParsedInference structure (384 bytes)
+message VpuHostParsedInference {
+  uint64 reserved = 1;                            // 8 bytes
+  VpuResourceRequirements resource_requirements = 2;  // 12 bytes
+  uint32 pad_0 = 3;                             // 4 bytes
+  VpuPerformanceMetrics performance_metrics = 4;       // 320 bytes
+  VpuTaskReference mapped = 5;                  // 24 bytes (VpuTaskReference<VpuMappedInference>)
+}
+
+// VpuMappedInference structure (448 bytes)
+message VpuMappedInference {
+  uint32 vpu_nnrt_api_ver = 1;         // 4 bytes
+  uint32 pad_0 = 2;                     // 4 bytes
+  uint64 reserved_0 = 3;                // 8 bytes
+  VpuTaskCounts task_storage_counts = 4;  // 28 bytes
+  uint32 task_storage_size = 5;         // 4 bytes
+  VpuTaskReference dma_tasks = 6;        // 24 bytes x VPU_MAX_DMA_ENGINES
+  VpuTaskReference invariants = 7;        // 24 bytes
+  VpuTaskReference variants = 8;          // 24 bytes
+  VpuTaskReference act_kernel_ranges = 9; // 24 bytes
+  VpuTaskReference act_kernel_invocations = 10; // 24 bytes
+  VpuTaskReference barrier_configs = 11;  // 24 bytes
+  VpuNNShaveRuntimeConfigs shv_rt_configs = 12; // 4 bytes
+  uint32 pad_1 = 13;                    // 4 bytes
+  VpuTaskReference reserved_1 = 14;     // 24 bytes
+  uint32 pad_2 = 15;                    // 24 bytes
+}
+
+// VpuTaskCounts structure (28 bytes)
+message VpuTaskCounts {
+  uint32 dpu_invariant_count = 1;   // 4 bytes
+  uint32 dpu_variant_count = 2;     // 4 bytes
+  uint32 act_kernel_count = 3;        // 4 bytes
+  uint32 act_shv_kernel_count = 4;   // 4 bytes
+  uint32 dma_task_count = 5;          // 4 bytes
+  uint32 barrier_count = 6;          // 4 bytes
+  uint32 pad_0 = 7;                  // 4 bytes
+}
+
+// VpuNNShaveRuntimeConfigs structure (4 bytes)
+message VpuNNShaveRuntimeConfigs {
+  uint32 value = 1;  // 4 bytes
+}
+
 // Command Buffer metadata
 message CommandHeaderPrefix {
   bytes context_save_area = 1;  // 64 bytes
@@ -136,12 +217,23 @@ message VpuInternalFenceSync {
   repeated VpuCmdFence internal_fences = 1;
 }
 
+// Descriptor heap entry
+message VpuDescriptorHeapEntry {
+  uint32 entry_type = 1;      // Type of descriptor (0x100-0x202)
+  uint32 reserved_0 = 2;
+  uint64 address = 3;          // VPU address
+  uint32 size = 4;             // Size in bytes
+  uint32 reserved_1 = 5;
+  bytes data = 6;               // Raw descriptor data (for unknown types)
+}
+
 // Full command buffer
 message VpuCommandBuffer {
   CommandHeaderPrefix prefix = 1;
   VpuCmdBufferHeader header = 2;
   VpuInternalFenceSync internal_sync = 3;
   repeated VpuCommand commands = 4;
+  // Descriptor heap is separate from commands
 }
 
 // Buffer object information
@@ -152,7 +244,11 @@ message VpuBuffer {
   uint64 size = 4;
   uint64 mmap_offset = 5;
   uint32 flags = 6;
-  bytes data = 7;  // Raw buffer data (hex-encoded or binary)
+  oneof content {
+    bytes raw_data = 7;                    // Raw buffer data (hex-encoded or binary)
+    VpuHostParsedInference host_parsed_inference = 8;  // Buffer 1: Host Parsed Inference
+    VpuMappedInference mapped_inference = 9;         // Could be Buffer X: Mapped Inference
+  }
 }
 
 // VPU Job submission
@@ -179,4 +275,16 @@ enum VpuCmdType {
   MEMORY_FILL = 0x0202;
   COPY = 0x0302;
   INFERENCE_EXECUTE = 0x0306;
+}
+
+// Descriptor type enum
+enum VpuDescriptorType {
+  UNKNOWN_DESC = 0x000;
+  SCRATCH = 0x100;
+  METADATA = 0x101;
+  WEIGHTS = 0x102;
+  KERNEL_DATA = 0x103;
+  INPUT = 0x200;
+  OUTPUT = 0x201;
+  PROFILING_OUTPUT = 0x202;
 }

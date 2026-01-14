@@ -7,7 +7,7 @@ Converts Protobuf VPU jobs back to binary format for submission to the driver.
 import struct
 import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import List
 
 try:
     import vpu_job_pb2
@@ -16,10 +16,11 @@ except ImportError:
     print("  protoc --python_out=. vpu_job.proto")
     sys.exit(1)
 
-VPU_CONTEXT_SAVE_AREA_SIZE = 64
-# Binary format uses uint16 (2 bytes), proto stores as uint32 (4 bytes)
-# We write 2 bytes using only low 16 bits from proto
+# Constants
 VPU_CMD_HEADER_SIZE = 4
+VPU_HOST_PARSED_INFERENCE_SIZE = 384
+VPU_RESOURCE_REQUIREMENTS_SIZE = 12
+VPU_PERFORMANCE_METRICS_SIZE = 320
 
 class VpuJobLowerer:
     """Lowers Protobuf VPU jobs to binary format."""
@@ -32,7 +33,6 @@ class VpuJobLowerer:
         with open(self.protobuf_path, 'rb') as f:
             job = vpu_job_pb2.VpuJob()
             job.ParseFromString(f.read())
-
         return job
 
     def lower_command_buffer(self, cmd_buffer: vpu_job_pb2.VpuCommandBuffer) -> bytes:
@@ -47,7 +47,7 @@ class VpuJobLowerer:
 
         # Add vpu_cmd_buffer_header
         header_data = struct.pack(
-            '<5Q2I',
+            '<4I3Q',
             cmd_buffer.header.cmd_buffer_size,
             cmd_buffer.header.cmd_offset,
             cmd_buffer.header.api_version,
@@ -62,9 +62,9 @@ class VpuJobLowerer:
         # Add internal fences
         for fence in cmd_buffer.internal_sync.internal_fences:
             fence_data = struct.pack(
-                '<H HQQ',
-                fence.header.type,
-                fence.header.size,
+                '<H HIQQ',
+                fence.header.type & 0xFFFF,
+                fence.header.size & 0xFFFF,
                 fence.reserved_0,
                 fence.offset,
                 fence.value
@@ -105,7 +105,7 @@ class VpuJobLowerer:
 
     def _lower_timestamp(self, ts: vpu_job_pb2.VpuCmdTimestamp) -> bytes:
         return struct.pack(
-            '<HH I Q',
+            '<HH IQ',
             ts.header.type & 0xFFFF,
             ts.header.size & 0xFFFF,
             ts.type,
@@ -174,6 +174,52 @@ class VpuJobLowerer:
             inf.host_mapped_inference.reserved_0
         )
 
+    def lower_host_parsed_inference(self, hpi: vpu_job_pb2.VpuHostParsedInference) -> bytes:
+        """Lower VpuHostParsedInference to binary."""
+        result = bytearray()
+
+        # Reserved (8 bytes)
+        result.extend(struct.pack('<Q', hpi.reserved))
+
+        # ResourceRequirements (12 bytes)
+        res_req = hpi.resource_requirements
+        result.extend(struct.pack('<I', res_req.nn_slice_length))
+        # Padding: 6 bytes, stored as 2 uint32s
+        pad_low = res_req.pad_0 & 0xFFFF
+        pad_high = (res_req.pad_0 >> 16) & 0xFFFF
+        result.extend(struct.pack('<I', pad_low))
+        result.extend(struct.pack('<H', pad_high))
+        result.extend(struct.pack('<B', res_req.nn_slice_count))
+        result.extend(struct.pack('<B', res_req.nn_barriers))
+
+        # Padding (4 bytes)
+        result.extend(struct.pack('<I', hpi.pad_0))
+
+        # VpuPerformanceMetrics (320 bytes)
+        perf = hpi.performance_metrics
+        result.extend(struct.pack('<I', perf.freq_base))
+        result.extend(struct.pack('<I', perf.freq_step))
+        result.extend(struct.pack('<I', perf.bw_base))
+        result.extend(struct.pack('<I', perf.bw_step))
+
+        # ticks table: [5][5] = 25 uint64 = 200 bytes
+        for tick_val in perf.ticks:
+            result.extend(struct.pack('<Q', tick_val))
+
+        # scalability table: [5][5] = 25 float = 100 bytes
+        for scal_val in perf.scalability:
+            result.extend(struct.pack('<f', scal_val))
+
+        result.extend(struct.pack('<f', perf.activity_factor))
+
+        # VpuTaskReference<VpuMappedInference> (24 bytes)
+        mapped = hpi.mapped
+        result.extend(struct.pack('<Q', mapped.address))
+        result.extend(struct.pack('<I', mapped.count))
+        result.extend(struct.pack('<I', mapped.offset))
+
+        return bytes(result)
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 lower_vpu_job.py <vpu_job.pb> [output.json]")
@@ -210,8 +256,18 @@ def main():
                 'size': buf.size,
                 'mmap_offset': buf.mmap_offset,
                 'flags': buf.flags,
-                'data': buf.data.hex()
             }
+
+            # Handle buffer content
+            if buf.HasField('host_parsed_inference'):
+                lowerer_obj = VpuJobLowerer(pb_path)
+                json_buffer['data'] = lowerer_obj.lower_host_parsed_inference(buf.host_parsed_inference).hex()
+            elif buf.HasField('mapped_inference'):
+                # For now, keep as raw
+                json_buffer['data'] = buf.raw_data.hex()
+            else:
+                json_buffer['data'] = buf.raw_data.hex()
+
             json_data['buffers'].append(json_buffer)
 
         with open(output_path, 'w') as f:
