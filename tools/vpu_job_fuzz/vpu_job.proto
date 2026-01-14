@@ -1,0 +1,182 @@
+syntax = "proto3";
+
+package vpu_job;
+
+// VPU Command Buffer Header
+message VpuCmdBufferHeader {
+  uint32 cmd_buffer_size = 1;
+  uint32 cmd_offset = 2;
+  uint32 api_version = 3;
+  uint32 reserved_0 = 4;
+  uint64 descriptor_heap_base_address = 5;
+  uint64 submission_timestamp = 6;
+  uint64 fence_heap_base_address = 7;
+  uint64 context_save_area_address = 8;
+}
+
+// Common command header shared by all commands
+// NOTE: Original C format uses uint16, but proto3 only supports uint32.
+// The actual binary format uses 2-byte fields, but we store as 4-byte.
+// Conversion:
+//   - Lifting: Read uint16 (2 bytes), store as uint32 (4 bytes)
+//   - Lowering: Write as uint16 using only low 16 bits
+message VpuCmdHeader {
+  uint32 type = 1;   // Stored as 32 bits, binary uses 16 bits
+  uint32 size = 2;   // Stored as 32 bits, binary uses 16 bits
+}
+
+// Resource descriptor
+message VpuCmdResourceDescriptor {
+  uint64 address = 1;
+  uint32 width = 2;
+  uint32 reserved_0 = 3;
+}
+
+// Copy command descriptor (37xx)
+message VpuCmdCopyDescriptor37xx {
+  uint64 src_address = 1;
+  uint64 dst_address = 2;
+  uint32 size = 3;
+}
+
+// Copy command descriptor (40xx)
+message VpuCmdCopyDescriptor40xx {
+  uint32 size = 1;
+  uint64 src_address = 2;
+  uint64 dst_address = 3;
+}
+
+// Copy command
+message VpuCmdCopyBuffer {
+  VpuCmdHeader header = 1;
+  uint32 reserved_0 = 2;
+  uint64 desc_start_offset = 3;
+  uint32 desc_count = 4;
+  uint32 reserved_1 = 5;
+  oneof descriptors {
+    VpuCmdCopyDescriptor37xx desc_37xx = 6;
+    VpuCmdCopyDescriptor40xx desc_40xx = 7;
+  }
+}
+
+// Memory fill command
+message VpuCmdMemoryFill {
+  VpuCmdHeader header = 1;
+  uint32 reserved_0 = 2;
+  uint64 start_address = 3;
+  uint64 size = 4;
+  uint32 fill_pattern = 5;
+  uint32 reserved_1 = 6;
+}
+
+// Inference execute command
+message VpuCmdInferenceExecute {
+  VpuCmdHeader header = 1;
+  uint32 reserved_0 = 2;
+  uint64 inference_id = 3;
+  VpuCmdResourceDescriptor host_mapped_inference = 4;
+}
+
+// Timestamp command
+message VpuCmdTimestamp {
+  VpuCmdHeader header = 1;
+  uint32 type = 2;
+  uint64 timestamp_address = 3;
+}
+
+// Fence command (wait/signal)
+message VpuCmdFence {
+  VpuCmdHeader header = 1;
+  uint32 reserved_0 = 2;
+  uint64 offset = 3;
+  uint64 value = 4;
+}
+
+// Barrier command
+message VpuCmdBarrier {
+  VpuCmdHeader header = 1;
+  uint32 reserved_0 = 2;
+}
+
+// Metric query command
+message VpuCmdMetricQuery {
+  VpuCmdHeader header = 1;
+  uint32 metric_group_type = 2;
+  uint64 metric_data_address = 3;
+}
+
+// NOP command
+message VpuCmdNop {
+  VpuCmdHeader header = 1;
+}
+
+// Command variants
+message VpuCommand {
+  oneof cmd {
+    VpuCmdNop nop = 1;
+    VpuCmdTimestamp timestamp = 2;
+    VpuCmdFence fence = 3;
+    VpuCmdBarrier barrier = 4;
+    VpuCmdMetricQuery metric_query = 5;
+    VpuCmdMemoryFill memory_fill = 6;
+    VpuCmdCopyBuffer copy = 7;
+    VpuCmdInferenceExecute inference_execute = 8;
+  }
+}
+
+// Command Buffer metadata
+message CommandHeaderPrefix {
+  bytes context_save_area = 1;  // 64 bytes
+  uint64 fence_value = 2;
+  repeated uint64 reserved = 3;  // 7 * uint64
+}
+
+// Fence sync commands (2 internal fences)
+message VpuInternalFenceSync {
+  repeated VpuCmdFence internal_fences = 1;
+}
+
+// Full command buffer
+message VpuCommandBuffer {
+  CommandHeaderPrefix prefix = 1;
+  VpuCmdBufferHeader header = 2;
+  VpuInternalFenceSync internal_sync = 3;
+  repeated VpuCommand commands = 4;
+}
+
+// Buffer object information
+message VpuBuffer {
+  uint32 index = 1;
+  uint32 handle = 2;
+  uint64 vpu_addr = 3;
+  uint64 size = 4;
+  uint64 mmap_offset = 5;
+  uint32 flags = 6;
+  bytes data = 7;  // Raw buffer data (hex-encoded or binary)
+}
+
+// VPU Job submission
+message VpuJob {
+  uint32 vpu_fd = 1;
+  uint32 cmdq_id = 2;
+  uint64 buffers_ptr = 3;
+  uint32 buffer_count = 4;
+  repeated VpuBuffer buffers = 5;
+  uint32 commands_offset = 6;
+  uint32 preempt_buffer_index = 7;
+}
+
+// Command type enum for reference
+enum VpuCmdType {
+  UNKNOWN = 0x0000;
+  NOP = 0x0001;
+  TIMESTAMP = 0x0100;
+  FENCE_WAIT = 0x0101;
+  FENCE_SIGNAL = 0x0102;
+  BARRIER = 0x0103;
+  METRIC_QUERY_BEGIN = 0x0104;
+  METRIC_QUERY_END = 0x0105;
+  MEMORY_FILL = 0x0202;
+  COPY = 0x0302;
+  INFERENCE_EXECUTE = 0x0306;
+}
