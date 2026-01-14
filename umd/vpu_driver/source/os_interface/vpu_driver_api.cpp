@@ -26,6 +26,9 @@
 #include <unistd.h>
 #include <utility>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 namespace VPU {
 
@@ -213,35 +216,71 @@ int VPUDriverApi::commandQueueCreate(uint32_t priority, uint32_t &queueId, bool 
 }
 
 int VPUDriverApi::commandQueueSubmit(drm_ivpu_cmdq_submit *arg) const {
-    // std::cout << "commandQueueSubmit" << std::endl;
-    if (first) {
-        std::cout << "commandQueueSubmit" << std::endl;
-        std::cout << "vpuFd: " << vpuFd << std::endl;
-        std::cout << "cmdq_id: " << arg->cmdq_id << std::endl;
-        std::cout << "buffers_ptr: " << std::hex << arg->buffers_ptr << std::dec << std::endl;
-        std::cout << "buffer_count: " << arg->buffer_count << std::endl;
+    static int job_counter = 0;
+    
+    std::ostringstream json;
+    json << "{\n";
+    json << "  \"vpuFd\": " << vpuFd << ",\n";
+    json << "  \"cmdq_id\": " << arg->cmdq_id << ",\n";
+    json << "  \"buffers_ptr\": \"0x" << std::hex << arg->buffers_ptr << std::dec << "\",\n";
+    json << "  \"buffer_count\": " << arg->buffer_count << ",\n";
+    
+    uint32_t count = arg->buffer_count;
+    uint32_t *buffers = (uint32_t*)arg->buffers_ptr;
+    drm_ivpu_bo_info info;
+    
+    json << "  \"buffers\": [\n";
+    
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t handle = buffers[i];
         
-        uint32_t count = arg->buffer_count;
-        uint32_t *buffers = (uint32_t*)arg->buffers_ptr;
-        drm_ivpu_bo_info info;
-
-        for (uint32_t i = 0; i < count; i++) {
-            uint32_t handle = buffers[i];
-
-            info.handle = handle;
-            doIoctl(DRM_IOCTL_IVPU_BO_INFO, &info);
-            std::cout << std::hex << info.vpu_addr << std::dec << std::endl;
-            void *ptr = osInfc.osiMmap(nullptr, info.size, PROT_READ | PROT_WRITE, MAP_SHARED, vpuFd, safe_cast<off_t>(info.mmap_offset));
-
-            if (!ptr) std::cout << "error" << std::endl;
-
-            osInfc.osiMunmap(ptr, info.size);
+        info.handle = handle;
+        doIoctl(DRM_IOCTL_IVPU_BO_INFO, &info);
+        
+        void *ptr = osInfc.osiMmap(nullptr, info.size, PROT_READ | PROT_WRITE, MAP_SHARED, vpuFd, safe_cast<off_t>(info.mmap_offset));
+        
+        json << "    {\n";
+        json << "      \"index\": " << i << ",\n";
+        json << "      \"handle\": " << handle << ",\n";
+        json << "      \"vpu_addr\": \"0x" << std::hex << info.vpu_addr << std::dec << "\",\n";
+        json << "      \"size\": " << info.size << ",\n";
+        json << "      \"mmap_offset\": " << info.mmap_offset << ",\n";
+        json << "      \"flags\": " << info.flags << ",\n";
+        json << "      \"data\": \"";
+        
+        if (ptr && ptr != MAP_FAILED) {
+            unsigned char* data = static_cast<unsigned char*>(ptr);
+            for (uint64_t j = 0; j < info.size; j++) {
+                json << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[j]) << std::dec;
+            }
+        } else {
+            json << "null";
         }
-
-        std::cout << "commands_offset: " << arg->commands_offset << std::endl;
-        std::cout << "preempt_buffer_index: " << arg->preempt_buffer_index << std::endl;
-        first = 0;
+        
+        json << "\"\n";
+        json << "    }";
+        
+        if (i < count - 1) json << ",";
+        json << "\n";
+        
+        osInfc.osiMunmap(ptr, info.size);
     }
+    
+    json << "  ],\n";
+    json << "  \"commands_offset\": " << arg->commands_offset << ",\n";
+    json << "  \"preempt_buffer_index\": " << arg->preempt_buffer_index << "\n";
+    json << "}\n";
+    
+    ::mkdir("./vpu_jobs", 0755);
+    std::string filename = "./vpu_jobs/" + std::to_string(job_counter) + ".json";
+    std::ofstream outfile(filename);
+    if (outfile.is_open()) {
+        outfile << json.str();
+        outfile.close();
+    }
+    
+    job_counter++;
+    
     int ret = doIoctl(DRM_IOCTL_IVPU_CMDQ_SUBMIT, arg);
     if (ret && errno != EBUSY)
         LOG_E("DRM_IOCTL_IVPU_CMDQ_SUBMIT failed, error %d(%d)", ret, errno);

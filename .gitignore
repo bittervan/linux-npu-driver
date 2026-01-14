@@ -68,3 +68,6 @@ compile_commands.json
 __pycache__/
 *.py[cod]
 *$py.class
+
+vpu_jobs/
+
