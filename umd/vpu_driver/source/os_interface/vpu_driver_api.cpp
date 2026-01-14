@@ -218,6 +218,8 @@ int VPUDriverApi::commandQueueCreate(uint32_t priority, uint32_t &queueId, bool 
 int VPUDriverApi::commandQueueSubmit(drm_ivpu_cmdq_submit *arg) const {
     static int job_counter = 0;
     
+    std::cout << "submit!" << std::endl;
+    
     std::ostringstream json;
     json << "{\n";
     json << "  \"vpuFd\": " << vpuFd << ",\n";

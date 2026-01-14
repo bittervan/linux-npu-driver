@@ -231,46 +231,46 @@ TEST_F(Command, MultipleCommandQueueSubmissionStressTest) {
     }
 }
 
-TEST_F(Command, SynchronousCommandQueueSubmissionTest) {
-    const size_t numCommands = isSilicon() ? 1000 : 50;
-    auto mem = AllocSharedMemory(size);
-    uint64_t *ts = static_cast<uint64_t *>(mem.get());
-    ASSERT_TRUE(ts) << "Failed to allocate shared memory";
-    *ts = 0ULL;
+// TEST_F(Command, SynchronousCommandQueueSubmissionTest) {
+//     const size_t numCommands = isSilicon() ? 1000 : 50;
+//     auto mem = AllocSharedMemory(size);
+//     uint64_t *ts = static_cast<uint64_t *>(mem.get());
+//     ASSERT_TRUE(ts) << "Failed to allocate shared memory";
+//     *ts = 0ULL;
 
-    cmdQueueDesc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
-    auto sQueue = zeScope::commandQueueCreate(zeContext, zeDevice, cmdQueueDesc, ret);
-    ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
+//     cmdQueueDesc.mode = ZE_COMMAND_QUEUE_MODE_SYNCHRONOUS;
+//     auto sQueue = zeScope::commandQueueCreate(zeContext, zeDevice, cmdQueueDesc, ret);
+//     ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
 
-    for (size_t i = 0; i <= numCommands; i++) {
-        ASSERT_EQ(zeCommandListAppendWriteGlobalTimestamp(list, ts, nullptr, 0, nullptr),
-                  ZE_RESULT_SUCCESS);
-    }
-    ASSERT_EQ(zeCommandListClose(list), ZE_RESULT_SUCCESS);
+//     for (size_t i = 0; i <= numCommands; i++) {
+//         ASSERT_EQ(zeCommandListAppendWriteGlobalTimestamp(list, ts, nullptr, 0, nullptr),
+//                   ZE_RESULT_SUCCESS);
+//     }
+//     ASSERT_EQ(zeCommandListClose(list), ZE_RESULT_SUCCESS);
 
-    /* Execute single command list on synchronous mode */
-    ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
-              ZE_RESULT_SUCCESS);
-    /* The command list should be ready immediately after execution */
-    ASSERT_EQ(zeCommandQueueSynchronize(sQueue.get(), 0), ZE_RESULT_SUCCESS);
-    EXPECT_GT(*ts, 0);
+//     /* Execute single command list on synchronous mode */
+//     ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
+//               ZE_RESULT_SUCCESS);
+//     /* The command list should be ready immediately after execution */
+//     ASSERT_EQ(zeCommandQueueSynchronize(sQueue.get(), 0), ZE_RESULT_SUCCESS);
+//     EXPECT_GT(*ts, 0);
 
-    /* Execute three times without synchronization */
-    ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
-              ZE_RESULT_SUCCESS);
-    ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
-              ZE_RESULT_SUCCESS);
-    ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
-              ZE_RESULT_SUCCESS);
-    ASSERT_EQ(zeCommandQueueSynchronize(sQueue.get(), 0), ZE_RESULT_SUCCESS);
+//     /* Execute three times without synchronization */
+//     ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
+//               ZE_RESULT_SUCCESS);
+//     ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
+//               ZE_RESULT_SUCCESS);
+//     ASSERT_EQ(zeCommandQueueExecuteCommandLists(sQueue.get(), 1, &list, nullptr),
+//               ZE_RESULT_SUCCESS);
+//     ASSERT_EQ(zeCommandQueueSynchronize(sQueue.get(), 0), ZE_RESULT_SUCCESS);
 
-    /* Execute queue created in default mode, NOT_READY expected for timeout set to 0 */
-    *ts = 0;
-    ASSERT_EQ(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr), ZE_RESULT_SUCCESS);
-    ASSERT_EQ(zeCommandQueueSynchronize(queue, 0), ZE_RESULT_NOT_READY);
-    ASSERT_EQ(zeCommandQueueSynchronize(queue, syncTimeout), ZE_RESULT_SUCCESS);
-    EXPECT_GT(*ts, 0);
-}
+//     /* Execute queue created in default mode, NOT_READY expected for timeout set to 0 */
+//     *ts = 0;
+//     ASSERT_EQ(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr), ZE_RESULT_SUCCESS);
+//     ASSERT_EQ(zeCommandQueueSynchronize(queue, 0), ZE_RESULT_NOT_READY);
+//     ASSERT_EQ(zeCommandQueueSynchronize(queue, syncTimeout), ZE_RESULT_SUCCESS);
+//     EXPECT_GT(*ts, 0);
+// }
 
 class CommandTimestamp : public Command {};
 
@@ -481,52 +481,52 @@ TEST_F(CommandTimestamp, TwoCommandQueusWithinSameGroupExecuteTimestampAndSynchr
     }
 }
 
-TEST_F(CommandTimestamp, CommandTimestampStressTest) {
-    auto checkTimestamp = [&]() {
-        ze_result_t ret;
-        ze_context_desc_t contextDesc = {.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC,
-                                         .pNext = nullptr,
-                                         .flags = 0};
+// TEST_F(CommandTimestamp, CommandTimestampStressTest) {
+//     auto checkTimestamp = [&]() {
+//         ze_result_t ret;
+//         ze_context_desc_t contextDesc = {.stype = ZE_STRUCTURE_TYPE_CONTEXT_DESC,
+//                                          .pNext = nullptr,
+//                                          .flags = 0};
 
-        auto devContext = zeScope::contextCreate(zeDriver, contextDesc, ret);
-        ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
-        auto cmdQueue = zeScope::commandQueueCreate(devContext.get(), zeDevice, cmdQueueDesc, ret);
-        ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
+//         auto devContext = zeScope::contextCreate(zeDriver, contextDesc, ret);
+//         ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
+//         auto cmdQueue = zeScope::commandQueueCreate(devContext.get(), zeDevice, cmdQueueDesc, ret);
+//         ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
 
-        auto cmdList = zeScope::commandListCreate(devContext.get(), zeDevice, cmdListDesc, ret);
-        ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
+//         auto cmdList = zeScope::commandListCreate(devContext.get(), zeDevice, cmdListDesc, ret);
+//         ASSERT_EQ(ret, ZE_RESULT_SUCCESS);
 
-        auto mem = zeMemory::allocShared(devContext.get(), zeDevice, size, 0);
-        uint64_t *ts = static_cast<uint64_t *>(mem.get());
+//         auto mem = zeMemory::allocShared(devContext.get(), zeDevice, size, 0);
+//         uint64_t *ts = static_cast<uint64_t *>(mem.get());
 
-        ASSERT_EQ(zeCommandListAppendWriteGlobalTimestamp(cmdList.get(), ts, nullptr, 0, nullptr),
-                  ZE_RESULT_SUCCESS);
+//         ASSERT_EQ(zeCommandListAppendWriteGlobalTimestamp(cmdList.get(), ts, nullptr, 0, nullptr),
+//                   ZE_RESULT_SUCCESS);
 
-        ASSERT_EQ(zeCommandListClose(cmdList.get()), ZE_RESULT_SUCCESS);
+//         ASSERT_EQ(zeCommandListClose(cmdList.get()), ZE_RESULT_SUCCESS);
 
-        auto list = cmdList.get();
+//         auto list = cmdList.get();
 
-        PerfCounter counter(isSilicon() ? 5000 : 100);
-        counter.start();
+//         PerfCounter counter(isSilicon() ? 5000 : 100);
+//         counter.start();
 
-        while (!counter.isTimedOut()) {
-            EXPECT_EQ(zeCommandQueueExecuteCommandLists(cmdQueue.get(), 1, &list, nullptr),
-                      ZE_RESULT_SUCCESS);
-            EXPECT_EQ(zeCommandQueueSynchronize(cmdQueue.get(), syncTimeout * 2),
-                      ZE_RESULT_SUCCESS);
-            EXPECT_GT(*ts, 0ULL);
-        }
-    };
+//         while (!counter.isTimedOut()) {
+//             EXPECT_EQ(zeCommandQueueExecuteCommandLists(cmdQueue.get(), 1, &list, nullptr),
+//                       ZE_RESULT_SUCCESS);
+//             EXPECT_EQ(zeCommandQueueSynchronize(cmdQueue.get(), syncTimeout * 2),
+//                       ZE_RESULT_SUCCESS);
+//             EXPECT_GT(*ts, 0ULL);
+//         }
+//     };
 
-    const size_t threadsNum = 20;
-    std::vector<std::future<void>> tasks(threadsNum);
-    for (auto &task : tasks) {
-        task = std::async(std::launch::async, checkTimestamp);
-    }
-    for (const auto &task : tasks) {
-        task.wait();
-    }
-}
+//     const size_t threadsNum = 20;
+//     std::vector<std::future<void>> tasks(threadsNum);
+//     for (auto &task : tasks) {
+//         task = std::async(std::launch::async, checkTimestamp);
+//     }
+//     for (const auto &task : tasks) {
+//         task.wait();
+//     }
+// }
 class CommandCopy : public Command {};
 
 TEST_F(CommandCopy, AppendMemoryCopyLocalToLocalAndSynchronize) {

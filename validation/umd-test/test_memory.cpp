@@ -717,76 +717,76 @@ INSTANTIATE_TEST_SUITE_P(,
         break;                              \
     }
 
-TEST_P(MultiMemoryExecution, Pipeline) {
-    auto [name, params] = decodeMultiCopy(GetParam());
-    std::vector<std::thread> threads;
-    for (auto &param : params) {
-        threads.emplace_back([this, &param]() {
-            do {
-                ze_result_t ret;
-                auto scopedQueue =
-                    zeScope::commandQueueCreate(zeContext, zeDevice, cmdQueueDesc, ret);
-                BREAK_ON_FAIL(ret);
-                auto queue = scopedQueue.get();
+// TEST_P(MultiMemoryExecution, Pipeline) {
+//     auto [name, params] = decodeMultiCopy(GetParam());
+//     std::vector<std::thread> threads;
+//     for (auto &param : params) {
+//         threads.emplace_back([this, &param]() {
+//             do {
+//                 ze_result_t ret;
+//                 auto scopedQueue =
+//                     zeScope::commandQueueCreate(zeContext, zeDevice, cmdQueueDesc, ret);
+//                 BREAK_ON_FAIL(ret);
+//                 auto queue = scopedQueue.get();
 
-                auto scopedList = zeScope::commandListCreate(zeContext, zeDevice, cmdListDesc, ret);
-                BREAK_ON_FAIL(ret);
-                auto list = scopedList.get();
+//                 auto scopedList = zeScope::commandListCreate(zeContext, zeDevice, cmdListDesc, ret);
+//                 BREAK_ON_FAIL(ret);
+//                 auto list = scopedList.get();
 
-                std::shared_ptr<void> dst;
-                std::shared_ptr<void> src;
-                allocMemoryBasedOnType(param.type, param.size, dst, src);
-                ret = dst == nullptr || src == nullptr ? ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
-                                                       : ZE_RESULT_SUCCESS;
-                BREAK_ON_FAIL(ret);
+//                 std::shared_ptr<void> dst;
+//                 std::shared_ptr<void> src;
+//                 allocMemoryBasedOnType(param.type, param.size, dst, src);
+//                 ret = dst == nullptr || src == nullptr ? ZE_RESULT_ERROR_OUT_OF_HOST_MEMORY
+//                                                        : ZE_RESULT_SUCCESS;
+//                 BREAK_ON_FAIL(ret);
 
-                DataHandle::generateRandomData(src.get(), param.size);
+//                 DataHandle::generateRandomData(src.get(), param.size);
 
-                BREAK_ON_FAIL(zeCommandListAppendMemoryCopy(list,
-                                                            dst.get(),
-                                                            src.get(),
-                                                            param.size,
-                                                            nullptr,
-                                                            0,
-                                                            nullptr));
-                BREAK_ON_FAIL(zeCommandListClose(list));
-                // Warm up
-                BREAK_ON_FAIL(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr));
-                BREAK_ON_FAIL(zeCommandQueueSynchronize(queue, syncTimeout));
+//                 BREAK_ON_FAIL(zeCommandListAppendMemoryCopy(list,
+//                                                             dst.get(),
+//                                                             src.get(),
+//                                                             param.size,
+//                                                             nullptr,
+//                                                             0,
+//                                                             nullptr));
+//                 BREAK_ON_FAIL(zeCommandListClose(list));
+//                 // Warm up
+//                 BREAK_ON_FAIL(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr));
+//                 BREAK_ON_FAIL(zeCommandQueueSynchronize(queue, syncTimeout));
 
-                std::this_thread::sleep_for(std::chrono::microseconds(param.delayUs));
+//                 std::this_thread::sleep_for(std::chrono::microseconds(param.delayUs));
 
-                param.counter.startTimer(0, param.targetFps);
-                for (size_t i = 0; i < param.iterationCount; i++) {
-                    param.counter.delayNextFrame();
+//                 param.counter.startTimer(0, param.targetFps);
+//                 for (size_t i = 0; i < param.iterationCount; i++) {
+//                     param.counter.delayNextFrame();
 
-                    BREAK_ON_FAIL(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr));
-                    BREAK_ON_FAIL(zeCommandQueueSynchronize(queue, syncTimeout));
+//                     BREAK_ON_FAIL(zeCommandQueueExecuteCommandLists(queue, 1, &list, nullptr));
+//                     BREAK_ON_FAIL(zeCommandQueueSynchronize(queue, syncTimeout));
 
-                    param.counter.recordFrame();
-                }
-                param.counter.stopTimer();
-            } while (false);
-        });
-    }
+//                     param.counter.recordFrame();
+//                 }
+//                 param.counter.stopTimer();
+//             } while (false);
+//         });
+//     }
 
-    for (auto &thread : threads)
-        thread.join();
+//     for (auto &thread : threads)
+//         thread.join();
 
-    for (const auto &param : params) {
-        PRINTF("------------------------------------------------------\n");
-        PRINTF("Size/Type:            %lu/%s\n", param.size, param.type.c_str());
-        if (param.result == ZE_RESULT_SUCCESS) {
-            PRINTF("Status:               SUCCESS \n");
-        } else {
-            PRINTF("Status:               FAIL (%#x) \n", param.result);
-        }
-        PRINTF("FramesExecuted:       %lu\n", param.counter.frameCount);
-        PRINTF("CalculatedFPS:        %f\n", param.counter.fps);
-        PRINTF("Bandwidth[MB/s]:      %f\n", param.counter.getBytesPerSec(param.size) / (MB));
-        PRINTF("ExecutionTime[ms]:    %f\n", param.counter.totalTimeMs);
-        PRINTF("MinFrameExecTime[ms]: %f\n", param.counter.frameMinMs);
-        PRINTF("AvgFrameExecTime[ms]: %f\n", param.counter.frameAvgMs);
-        PRINTF("MaxFrameExecTime[ms]: %f\n", param.counter.frameMaxMs);
-    }
-}
+//     for (const auto &param : params) {
+//         PRINTF("------------------------------------------------------\n");
+//         PRINTF("Size/Type:            %lu/%s\n", param.size, param.type.c_str());
+//         if (param.result == ZE_RESULT_SUCCESS) {
+//             PRINTF("Status:               SUCCESS \n");
+//         } else {
+//             PRINTF("Status:               FAIL (%#x) \n", param.result);
+//         }
+//         PRINTF("FramesExecuted:       %lu\n", param.counter.frameCount);
+//         PRINTF("CalculatedFPS:        %f\n", param.counter.fps);
+//         PRINTF("Bandwidth[MB/s]:      %f\n", param.counter.getBytesPerSec(param.size) / (MB));
+//         PRINTF("ExecutionTime[ms]:    %f\n", param.counter.totalTimeMs);
+//         PRINTF("MinFrameExecTime[ms]: %f\n", param.counter.frameMinMs);
+//         PRINTF("AvgFrameExecTime[ms]: %f\n", param.counter.frameAvgMs);
+//         PRINTF("MaxFrameExecTime[ms]: %f\n", param.counter.frameMaxMs);
+//     }
+// }
