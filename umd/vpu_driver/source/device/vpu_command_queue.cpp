@@ -45,8 +45,8 @@ bool submitWithWait(const VPUJob *job, T &&submitFunc) {
         while ((submitFunc)(cmdBuffer) < 0) {
             /*
              * SUBMIT ioctl returns EBUSY if command queue is full. Driver should wait till firmware
-             * completes a job and make a space for new job in queue. Polling time is set to 2
-             * seconds to match with TDR timeout.
+             * completes a job and make a space for new job in queue. Polling time is kept bounded
+             * to match the driver's shorter recovery window.
              */
             if (errno != EBUSY) {
                 LOG_E("Failed to submit command buffer: %p", cmdBuffer.get());

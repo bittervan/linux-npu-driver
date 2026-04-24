@@ -135,19 +135,21 @@ message VpuCommand {
   }
 }
 
-// VpuTaskReference structure (24 bytes)
+// VpuTaskReference structure (40 bytes)
 message VpuTaskReference {
-  uint64 address = 1;  // VPU address of referenced structure
-  uint32 count = 2;    // Number of entries
-  uint32 offset = 3;   // Offset from address
+  uint64 reserved_0 = 1;
+  uint64 reserved_1 = 2;
+  uint64 reserved_2 = 3;
+  uint64 address = 4;  // VPU address of referenced structure
+  uint64 count = 5;    // Number of entries
 }
 
 // ResourceRequirements structure (12 bytes)
 message VpuResourceRequirements {
   uint32 nn_slice_length = 1;  // Network slice length
-  uint32 pad_0 = 2;          // Padding (6 bytes, stored as 2 uint32)
+  bytes deprecated = 2;       // 6 bytes
   uint32 nn_slice_count = 3;  // Number of network slices (1 byte)
-  uint32 nn_barriers = 4;    // Number of barriers (1 byte)
+  uint32 nn_barriers = 4;     // Number of barriers (1 byte)
 }
 
 // VpuPerformanceMetrics structure (320 bytes)
@@ -162,47 +164,88 @@ message VpuPerformanceMetrics {
 }
 
 // VpuHostParsedInference structure (384 bytes)
+enum VpuMmiAccessMode {
+  VPU_MMI_INDIRECT = 0;
+  VPU_MMI_DIRECT = 1;
+  VPU_MMI_UNKNOWN = 255;
+}
+
 message VpuHostParsedInference {
   uint64 reserved = 1;                            // 8 bytes
   VpuResourceRequirements resource_requirements = 2;  // 12 bytes
-  uint32 pad_0 = 3;                             // 4 bytes
-  VpuPerformanceMetrics performance_metrics = 4;       // 320 bytes
-  VpuTaskReference mapped = 5;                  // 24 bytes (VpuTaskReference<VpuMappedInference>)
+  VpuMmiAccessMode mmi_access = 3;              // 1 byte
+  bytes pad_0 = 4;                              // 3 bytes
+  VpuPerformanceMetrics performance_metrics = 5;       // 320 bytes
+  VpuTaskReference mapped = 6;                  // 40 bytes (union)
+  VpuTaskReference managed_inference = 7;       // 40 bytes (union)
 }
 
-// VpuMappedInference structure (448 bytes)
+// VpuMappedInference structure (40xx: 1728 bytes)
+// VPU_ALIGNED_STRUCT(64)
 message VpuMappedInference {
-  uint32 vpu_nnrt_api_ver = 1;         // 4 bytes
+  uint32 vpu_nnrt_api_ver = 1;         // 4 bytes - 0x00040000 for 40xx
   uint32 pad_0 = 2;                     // 4 bytes
   uint64 reserved_0 = 3;                // 8 bytes
-  VpuTaskCounts task_storage_counts = 4;  // 28 bytes
-  uint32 task_storage_size = 5;         // 4 bytes
-  VpuTaskReference dma_tasks = 6;        // 24 bytes x VPU_MAX_DMA_ENGINES
-  VpuTaskReference invariants = 7;        // 24 bytes
-  VpuTaskReference variants = 8;          // 24 bytes
-  VpuTaskReference act_kernel_ranges = 9; // 24 bytes
-  VpuTaskReference act_kernel_invocations = 10; // 24 bytes
-  VpuTaskReference barrier_configs = 11;  // 24 bytes
-  VpuNNShaveRuntimeConfigs shv_rt_configs = 12; // 4 bytes
-  uint32 pad_1 = 13;                    // 4 bytes
-  VpuTaskReference reserved_1 = 14;     // 24 bytes
-  uint32 pad_2 = 15;                    // 24 bytes
+  uint64 logaddr_dma_hwp_ = 4;         // 8 bytes
+
+  VpuTaskCounts task_storage_counts = 5;  // 36 bytes
+  uint32 task_storage_size = 6;         // 4 bytes
+
+  // Task arrays with VPU_MAX_TILES (6) elements each
+  repeated VpuTaskReference dma_tasks_ddr = 7;  // 6 entries, 40 bytes each
+  repeated VpuTaskReference dma_tasks_cmx = 8;  // 6 entries, 40 bytes each
+  repeated VpuTaskReference invariants = 9;     // 6 entries, 40 bytes each
+  repeated VpuTaskReference variants = 10;      // 6 entries, 40 bytes each
+  repeated VpuTaskReference act_kernel_ranges = 11; // 6 entries, 40 bytes each
+  repeated VpuTaskReference act_kernel_invocations = 12; // 6 entries, 40 bytes each
+  VpuTaskReference media_tasks = 13;        // 40 bytes
+  VpuTaskReference barrier_configs = 14;  // 40 bytes
+
+  VpuNNShaveRuntimeConfigs shv_rt_configs = 15; // 96 bytes
+  uint64 hwp_workpoint_cfg_addr = 16;    // 8 bytes
+  VpuTaskReference managed_inference = 17; // 40 bytes
 }
 
-// VpuTaskCounts structure (28 bytes)
+// VpuTaskCounts structure (40xx: 36 bytes)
 message VpuTaskCounts {
-  uint32 dpu_invariant_count = 1;   // 4 bytes
-  uint32 dpu_variant_count = 2;     // 4 bytes
-  uint32 act_kernel_count = 3;        // 4 bytes
-  uint32 act_shv_kernel_count = 4;   // 4 bytes
-  uint32 dma_task_count = 5;          // 4 bytes
-  uint32 barrier_count = 6;          // 4 bytes
-  uint32 pad_0 = 7;                  // 4 bytes
+  uint32 reserved1 = 1;         // 4 bytes
+  uint32 reserved2 = 2;         // 4 bytes
+  uint32 dma_ddr_count = 3;          // 4 bytes
+  uint32 dma_cmx_count = 4;          // 4 bytes
+  uint32 dpu_invariant_count = 5;   // 4 bytes
+  uint32 dpu_variant_count = 6;     // 4 bytes
+  uint32 act_range_count = 7;        // 4 bytes (act_kernel_count)
+  uint32 act_invo_count = 8;        // 4 bytes (act_shv_kernel_count)
+  uint32 media_count = 9;             // 4 bytes
 }
 
-// VpuNNShaveRuntimeConfigs structure (4 bytes)
+// Stack frames reference (48 bytes)
+message VpuStackFramesRef {
+  VpuTaskReference ref = 1;  // 40 bytes
+  uint64 pad_0 = 2;          // 8 bytes
+}
+
+// Stack frames inline array (48 bytes)
+message VpuStackFramesArray {
+  repeated uint32 stack_frames = 1;  // 12 entries
+}
+
+// VpuNNShaveRuntimeConfigs structure (96 bytes)
 message VpuNNShaveRuntimeConfigs {
-  uint32 value = 1;  // 4 bytes
+  uint64 reserved = 1;
+  uint64 runtime_entry = 2;
+  uint64 act_rt_window_base = 3;
+  oneof stack_frames {
+    VpuStackFramesRef stack_frames_ref = 4;
+    VpuStackFramesArray stack_frames_array = 5;
+  }
+  uint32 stack_size = 6;
+  uint32 code_window_buffer_size = 7;
+  uint32 perf_metrics_mask = 8;
+  uint32 runtime_version = 9;
+  uint32 use_schedule_embedded_rt = 10; // 1 byte
+  uint32 dpu_perf_mode = 11;            // 1 byte
+  bytes pad_0 = 12;                     // 6 bytes
 }
 
 // Command Buffer metadata

@@ -22,12 +22,13 @@ VPU_CONTEXT_SAVE_AREA_SIZE = 64
 # Binary format uses uint16 (2 bytes), proto stores as uint32 (4 bytes)
 # We read 2 bytes from binary, store as 4 bytes in proto
 VPU_CMD_HEADER_SIZE = 4  # uint16_t type + uint16_t size
-VPU_CMD_BUFFER_HEADER_SIZE = 64  # 8 * uint64
+VPU_CMD_BUFFER_HEADER_SIZE = 48  # vpu_cmd_buffer_header_t
 
 # VpuHostParsedInference sizes
 VPU_HOST_PARSED_INFERENCE_SIZE = 384  # Total size
 VPU_RESOURCE_REQUIREMENTS_SIZE = 12   # ResourceRequirements size
 VPU_PERFORMANCE_METRICS_SIZE = 320   # PerformanceMetrics size
+VPU_TASK_REFERENCE_SIZE = 40
 
 # Command types
 VPU_CMD_TYPE = {
@@ -137,84 +138,145 @@ class VpuJobLifter:
             # Parse ResourceRequirements (offset 8-20)
             res_req = hpi.resource_requirements
             res_req.nn_slice_length = struct.unpack('<I', data[8:12])[0]
-            # Padding: 6 bytes, stored as 2 uint32s
-            res_req.pad_0 = struct.unpack('<I', data[12:16])[0]
-            res_req.pad_0 = (res_req.pad_0 << 16) | struct.unpack('<H', data[16:18])[0]
-            res_req.nn_slice_count = struct.unpack('<B', data[20:21])[0]
-            res_req.nn_barriers = struct.unpack('<B', data[21:22])[0]
+            res_req.deprecated = data[12:18]
+            res_req.nn_slice_count = data[18]
+            res_req.nn_barriers = data[19]
 
-            # Padding (offset 20-24)
-            hpi.pad_0 = struct.unpack('<I', data[24:28])[0]
+            # MMI access + padding (offset 20-24)
+            hpi.mmi_access = data[20]
+            hpi.pad_0 = data[21:24]
 
             # Parse VpuPerformanceMetrics (offset 24-344)
             perf = hpi.performance_metrics
-            perf.freq_base = struct.unpack('<I', data[28:32])[0]
-            perf.freq_step = struct.unpack('<I', data[32:36])[0]
-            perf.bw_base = struct.unpack('<I', data[36:40])[0]
-            perf.bw_step = struct.unpack('<I', data[40:44])[0]
+            perf.freq_base = struct.unpack('<I', data[24:28])[0]
+            perf.freq_step = struct.unpack('<I', data[28:32])[0]
+            perf.bw_base = struct.unpack('<I', data[32:36])[0]
+            perf.bw_step = struct.unpack('<I', data[36:40])[0]
 
             # Parse ticks and scalability tables (offset 44-364)
             # Each is [5][5] array: 25 elements of 8 bytes for ticks (200 bytes)
             #                        25 elements of 4 bytes for scalability (100 bytes)
-            ticks_data = data[44:244]
+            ticks_data = data[40:240]
             for i in range(25):
                 tick_val = struct.unpack('<Q', ticks_data[i*8:(i+1)*8])[0]
                 perf.ticks.append(tick_val)
 
-            scal_data = data[244:344]
+            scal_data = data[240:340]
             for i in range(25):
                 scal_val = struct.unpack('<f', scal_data[i*4:(i+1)*4])[0]
                 perf.scalability.append(scal_val)
 
-            perf.activity_factor = struct.unpack('<f', data[344:348])[0]
+            perf.activity_factor = struct.unpack('<f', data[340:344])[0]
 
-            # Parse VpuTaskReference<VpuMappedInference> (offset 344-368)
-            mapped = hpi.mapped
-            mapped.address = struct.unpack('<Q', data[344:352])[0]
-            mapped.count = struct.unpack('<I', data[352:356])[0]
-            mapped.offset = struct.unpack('<I', data[356:360])[0]
+            # Parse VpuTaskReference union (offset 344-384)
+            task_ref = self._parse_task_reference(data[344:384])
+            if hpi.mmi_access == vpu_job_pb2.VPU_MMI_DIRECT:
+                hpi.managed_inference.CopyFrom(task_ref)
+            else:
+                hpi.mapped.CopyFrom(task_ref)
 
             return hpi
         except Exception as e:
             print(f"Warning: Failed to parse Host Parsed Inference: {e}")
             return None
 
+    def _parse_task_reference(self, data: bytes) -> vpu_job_pb2.VpuTaskReference:
+        """Parse VpuTaskReference structure (40 bytes)."""
+        ref = vpu_job_pb2.VpuTaskReference()
+        if len(data) < VPU_TASK_REFERENCE_SIZE:
+            return ref
+        ref.reserved_0 = struct.unpack('<Q', data[0:8])[0]
+        ref.reserved_1 = struct.unpack('<Q', data[8:16])[0]
+        ref.reserved_2 = struct.unpack('<Q', data[16:24])[0]
+        ref.address = struct.unpack('<Q', data[24:32])[0]
+        ref.count = struct.unpack('<Q', data[32:40])[0]
+        return ref
+
     def _parse_mapped_inference(self, data: bytes) -> Optional[vpu_job_pb2.VpuMappedInference]:
-        """Parse VpuMappedInference structure from buffer data."""
-        if len(data) < 448:
+        """Parse VpuMappedInference structure from buffer data (40xx)."""
+        if len(data) < 1728:
             return None
 
         try:
             mapped_inf = vpu_job_pb2.VpuMappedInference()
 
-            # Parse header (offset 0-24)
             mapped_inf.vpu_nnrt_api_ver = struct.unpack('<I', data[0:4])[0]
             mapped_inf.pad_0 = struct.unpack('<I', data[4:8])[0]
             mapped_inf.reserved_0 = struct.unpack('<Q', data[8:16])[0]
+            mapped_inf.logaddr_dma_hwp_ = struct.unpack('<Q', data[16:24])[0]
 
-            # Parse VpuTaskCounts (offset 16-44)
             counts = mapped_inf.task_storage_counts
-            counts.dpu_invariant_count = struct.unpack('<I', data[16:20])[0]
-            counts.dpu_variant_count = struct.unpack('<I', data[20:24])[0]
-            counts.act_kernel_count = struct.unpack('<I', data[24:28])[0]
-            counts.act_shv_kernel_count = struct.unpack('<I', data[28:32])[0]
-            counts.dma_task_count = struct.unpack('<I', data[32:36])[0]
-            counts.barrier_count = struct.unpack('<I', data[36:40])[0]
-            counts.pad_0 = struct.unpack('<I', data[40:44])[0]
+            counts.reserved1 = struct.unpack('<I', data[24:28])[0]
+            counts.reserved2 = struct.unpack('<I', data[28:32])[0]
+            counts.dma_ddr_count = struct.unpack('<I', data[32:36])[0]
+            counts.dma_cmx_count = struct.unpack('<I', data[36:40])[0]
+            counts.dpu_invariant_count = struct.unpack('<I', data[40:44])[0]
+            counts.dpu_variant_count = struct.unpack('<I', data[44:48])[0]
+            counts.act_range_count = struct.unpack('<I', data[48:52])[0]
+            counts.act_invo_count = struct.unpack('<I', data[52:56])[0]
+            counts.media_count = struct.unpack('<I', data[56:60])[0]
 
-            # Parse task_storage_size (offset 44-48)
-            mapped_inf.task_storage_size = struct.unpack('<I', data[44:48])[0]
+            mapped_inf.task_storage_size = struct.unpack('<I', data[60:64])[0]
 
-            # Note: VpuTaskReference fields are complex, skipping detailed parsing
-            # for now - just storing raw data
+            offset = 64
+            offset = self._parse_task_reference_array(mapped_inf.dma_tasks_ddr, data, offset, 6)
+            offset = self._parse_task_reference_array(mapped_inf.dma_tasks_cmx, data, offset, 6)
+            offset = self._parse_task_reference_array(mapped_inf.invariants, data, offset, 6)
+            offset = self._parse_task_reference_array(mapped_inf.variants, data, offset, 6)
+            offset = self._parse_task_reference_array(mapped_inf.act_kernel_ranges, data, offset, 6)
+            offset = self._parse_task_reference_array(mapped_inf.act_kernel_invocations, data, offset, 6)
 
-            # Parse VpuNNShaveRuntimeConfigs (offset ?)
-            # Skipping detailed parsing for now
+            mapped_inf.media_tasks.CopyFrom(self._parse_task_reference(data[offset:offset + VPU_TASK_REFERENCE_SIZE]))
+            offset += VPU_TASK_REFERENCE_SIZE
+            mapped_inf.barrier_configs.CopyFrom(self._parse_task_reference(data[offset:offset + VPU_TASK_REFERENCE_SIZE]))
+            offset += VPU_TASK_REFERENCE_SIZE
+
+            mapped_inf.shv_rt_configs.CopyFrom(self._parse_nn_shave_runtime_configs(data[offset:offset + 96]))
+            offset += 96
+
+            mapped_inf.hwp_workpoint_cfg_addr = struct.unpack('<Q', data[offset:offset + 8])[0]
+            offset += 8
+            mapped_inf.managed_inference.CopyFrom(self._parse_task_reference(data[offset:offset + VPU_TASK_REFERENCE_SIZE]))
 
             return mapped_inf
         except Exception as e:
             print(f"Warning: Failed to parse Mapped Inference: {e}")
             return None
+
+    def _parse_task_reference_array(self, target, data: bytes, offset: int, count: int) -> int:
+        for _ in range(count):
+            target.add().CopyFrom(self._parse_task_reference(data[offset:offset + VPU_TASK_REFERENCE_SIZE]))
+            offset += VPU_TASK_REFERENCE_SIZE
+        return offset
+
+    def _parse_nn_shave_runtime_configs(self, data: bytes) -> vpu_job_pb2.VpuNNShaveRuntimeConfigs:
+        cfg = vpu_job_pb2.VpuNNShaveRuntimeConfigs()
+        if len(data) < 96:
+            return cfg
+
+        cfg.reserved = struct.unpack('<Q', data[0:8])[0]
+        cfg.runtime_entry = struct.unpack('<Q', data[8:16])[0]
+        cfg.act_rt_window_base = struct.unpack('<Q', data[16:24])[0]
+
+        union_data = data[24:72]
+        ref = self._parse_task_reference(union_data[0:40])
+        pad = struct.unpack('<Q', union_data[40:48])[0]
+        if ref.address != 0 or ref.count != 0:
+            cfg.stack_frames_ref.ref.CopyFrom(ref)
+            cfg.stack_frames_ref.pad_0 = pad
+        else:
+            for i in range(12):
+                val = struct.unpack('<I', union_data[i * 4:(i + 1) * 4])[0]
+                cfg.stack_frames_array.stack_frames.append(val)
+
+        cfg.stack_size = struct.unpack('<I', data[72:76])[0]
+        cfg.code_window_buffer_size = struct.unpack('<I', data[76:80])[0]
+        cfg.perf_metrics_mask = struct.unpack('<I', data[80:84])[0]
+        cfg.runtime_version = struct.unpack('<I', data[84:88])[0]
+        cfg.use_schedule_embedded_rt = data[88]
+        cfg.dpu_perf_mode = data[89]
+        cfg.pad_0 = data[90:96]
+        return cfg
 
     def parse_command_buffer(self, buffer_bytes: bytes) -> vpu_job_pb2.VpuCommandBuffer:
         """Parse command buffer structure."""
@@ -236,7 +298,7 @@ class VpuJobLifter:
             raise ValueError("Buffer too small for vpu_cmd_buffer_header")
 
         try:
-            header_fields = struct.unpack('<4I3Q', buffer_bytes[header_offset:header_offset + 40])
+            header_fields = struct.unpack('<4I4Q', buffer_bytes[header_offset:header_offset + 48])
             cmd_buffer.header.cmd_buffer_size = header_fields[0]
             cmd_buffer.header.cmd_offset = header_fields[1]
             cmd_buffer.header.api_version = header_fields[2]
@@ -244,6 +306,7 @@ class VpuJobLifter:
             cmd_buffer.header.descriptor_heap_base_address = header_fields[4]
             cmd_buffer.header.submission_timestamp = header_fields[5]
             cmd_buffer.header.fence_heap_base_address = header_fields[6]
+            cmd_buffer.header.context_save_area_address = header_fields[7]
         except Exception as e:
             print(f"Warning: Failed to parse header at offset {header_offset}: {e}")
             cmd_buffer.header.cmd_buffer_size = 0
@@ -251,7 +314,7 @@ class VpuJobLifter:
             cmd_buffer.header.context_save_area_address = 0
 
         # Parse internal sync fences (2 fences after header, each 24 bytes)
-        internal_sync_offset = header_offset + 64
+        internal_sync_offset = header_offset + VPU_CMD_BUFFER_HEADER_SIZE
         for i in range(2):
             fence_offset = internal_sync_offset + i * 24
             if len(buffer_bytes) >= fence_offset + 4:
